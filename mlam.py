@@ -5,7 +5,6 @@ __version__ = '0.0.1'
 __date__ = '2020-08-28'
 __email__ = 'fredflorescfa@gmail.com'
 
-
 """Code from MLdP's Machine Learning for Asset Managers"""
 
 import numpy as np
@@ -13,6 +12,8 @@ import pandas as pd
 import re
 from sklearn.neighbors import KernelDensity
 import yfinance as yf
+from scipy.optimize import minimize
+import matplotlib.pyplot as plt
 
 
 def get_daily_stock_returns(period='5y', interval='1d'):
@@ -52,7 +53,7 @@ def mp_pdf(var, q, pts):
 
     pdf = q/(2 * np.pi * var * eVal) * ((eMax - eVal) * (eVal - eMin)) ** 0.5
 
-    pdf = pd.Series(pdf, index=eVal)
+    pdf = pd.Series(np.squeeze(pdf), index=np.squeeze(eVal))
 
     return pdf
 
@@ -94,3 +95,62 @@ def fit_kde(obs, b_width=0.25, kernel='gaussian', x=None):
     pdf = pd.Series(np.exp(log_prob), index=x.flatten())
 
     return pdf
+
+
+def get_rnd_cov(n_cols, n_facts):
+    w = np.random.normal(size=(n_cols, n_facts))
+    cov = np.dot(w, w.T)  # random cov mat but not full rank
+    rank = np.linalg.matrix_rank(cov)
+    cov += np.diag(np.random.uniform(size=n_cols))  # full rank cov
+    rank_full = np.linalg.matrix_rank(cov)
+    return cov
+
+
+def cov2corr(cov):
+    std = np.sqrt(np.diag(cov))
+    corr = cov / np.outer(std, std)
+    corr[corr <= -1] = -1
+    corr[corr > 1] = 1
+    return corr
+
+
+def err_pdfs(var, e_val, q, b_width, pts=1000):
+    """
+    Fit error
+    :param var:
+    :param e_val:
+    :param q:
+    :param b_width:
+    :param pts:
+    :return:
+    """
+    pdf0 = mp_pdf(var, q, pts)  # theoretical PDF
+    pdf1 = fit_kde(e_val, b_width, x=pdf0.index.values)  # empirical PDF
+    sse = np.sum((pdf1-pdf0)**2)
+    return sse
+
+
+def find_max_eval(e_val, q, b_width):
+    """
+    Find max random eigenvalue by fitting Marcenko-Pastur distribution
+    :param e_val:
+    :param q:
+    :param b_width:
+    :return:
+    """
+    out = minimize(lambda *x: err_pdfs(*x), 0.5, args=(e_val, q, b_width),
+                   bounds=((1E-5, 1-1E-5),))
+
+    if out['success']:
+        var = out['x'][0]
+    else:
+        var = 1
+
+    e_max = var*(1+(1.0/q)**0.5)**2
+    return e_max, var
+
+
+
+
+
+
