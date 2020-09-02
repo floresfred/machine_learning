@@ -13,6 +13,8 @@ import re
 from sklearn.neighbors import KernelDensity
 import yfinance as yf
 from scipy.optimize import minimize
+from scipy.linalg import block_diag
+from sklearn.covariance import LedoitWolf
 import matplotlib.pyplot as plt
 
 
@@ -114,6 +116,11 @@ def cov2corr(cov):
     return corr
 
 
+def corr2cov(corr, std):
+    cov = corr * np.outer(std, std)
+    return cov
+
+
 def err_pdfs(var, e_val, q, b_width, pts=1000):
     """
     Fit error
@@ -148,6 +155,120 @@ def find_max_eval(e_val, q, b_width):
 
     e_max = var*(1+(1.0/q)**0.5)**2
     return e_max, var
+
+
+def denoised_corr(e_val, e_vec, n_facts):
+    """
+    Remove noise from corr by fixing random eigenvalues.
+
+    :param e_val:
+    :param e_vec:
+    :param n_facts:
+    :return:
+    """
+    e_val_dn = np.diag(e_val).copy()
+    e_val_dn[n_facts:] = e_val_dn[n_facts:].sum()/float(e_val_dn.shape[0] - n_facts)
+    e_val_dn = np.diag(e_val_dn)
+    corr1 = np.dot(e_vec, e_val_dn).dot(e_vec.T)
+    corr1 = cov2corr(corr1)
+
+    return corr1
+
+
+def denoised_corr2(e_val, e_vec, n_facts, alpha=0):
+    """
+    Remove noise from corr through targeted shrinkage
+
+    :param e_val:
+    :param e_vec:
+    :param n_facts:
+    :param alpha:
+    :return:
+    """
+    e_val_l = e_val[:n_facts, :n_facts]
+    e_vec_l = e_vec[:, :n_facts]
+
+    e_val_r = e_val[n_facts:, n_facts:]
+    e_vec_r = e_vec[:, n_facts:]
+
+    corr0 = np.dot(e_vec_l, e_val_l).dot(e_vec_l.T)
+    corr1 = np.dot(e_vec_r, e_val_r).dot(e_vec_r.T)
+
+    corr2 = corr0 + alpha*corr1 + np.diag(np.diag(corr1))
+
+    return corr2
+
+
+def form_block_matrix(n_blocks, b_size, b_corr):
+    """
+    Construct block matrices and center along diagonal of main matrix
+    :param n_blocks:
+    :param b_size:
+    :param b_corr:
+    :return:
+    """
+
+    block = np.ones((b_size, b_size)) * b_corr
+    block[range(b_size), range(b_size)] = 1  # set diagonal = 1
+    corr = block_diag(*([block] * n_blocks))
+    return corr
+
+
+def form_true_matrix(n_blocks, b_size, b_corr):
+    """
+
+    :param n_blocks:
+    :param b_size:
+    :param b_corr:
+    :return:
+    """
+    corr0 = form_block_matrix(n_blocks, b_size, b_corr)
+    corr0 = pd.DataFrame(corr0)
+    cols = corr0.columns.to_list()
+    np.random.shuffle(cols)  # shuffles in place
+    corr0 = corr0[cols].loc[cols].copy(deep=True)  # deep = True is default
+    std0 = np.random.uniform(0.05, 0.2, corr0.shape[0])
+    cov0 = corr2cov(corr0, std0)
+    mu0 = np.random.normal(std0, std0, cov0.shape[0]).reshape(-1, 1)
+
+    return mu0, cov0
+
+
+def sim_cov_mu(mu0, cov0, n_obs, shrink=False):
+    x = np.random.multivariate_normal(mu0.flatten(), cov0, size=n_obs)
+    mu1 = x.mean(axis=0).reshape(-1, 1)
+    if shrink:
+        cov1 = LedoitWolf().fit(x).covariance_
+    else:
+        cov1 = np.cov(x, rowvar=0)
+
+    return mu1, cov1
+
+
+def denoise_cov(cov0, q, b_width):
+    corr0 = cov2corr(cov0)
+    eval0, evec0 = get_pca(corr0)
+    emax0, var0 = find_max_eval(np.diag(eval0), q, b_width)
+    nfacts0 = eval0.shape[0] - np.diag(eval0)[::-1].searchsorted(emax0)
+    corr1 = denoised_corr(eval0, evec0, nfacts0)
+    cov1 = corr2cov(corr1, np.diag(cov0) ** 0.5)
+
+    return cov1
+
+
+def opt_port(cov, mu=None):
+    inv = np.linalg.inv(cov)
+    ones = np.ones(shape=(inv.shape[0], 1))
+    if mu is None:
+        mu =ones
+    w = np.dot(inv, mu)
+    w /= np.dot(ones.T, w)
+    return w
+
+
+
+
+
 
 
 
