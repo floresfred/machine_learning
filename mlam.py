@@ -260,7 +260,7 @@ def opt_port(cov, mu=None):
     inv = np.linalg.inv(cov)
     ones = np.ones(shape=(inv.shape[0], 1))
     if mu is None:
-        mu =ones
+        mu = ones
     w = np.dot(inv, mu)
     w /= np.dot(ones.T, w)
     return w
