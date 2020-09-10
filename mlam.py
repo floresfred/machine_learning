@@ -257,12 +257,20 @@ def denoise_cov(cov0, q, b_width):
 
 
 def opt_port(cov, mu=None):
+    """
+    Find portfolio weights, w, that minimizes risk for a given level of expected returns, mu.
+    Procedure follows the alternative derivation in Zivot's Portfolio Matrix Theory Ch.1 (2013)
+
+    :param cov: a square matrix, diagonal = variances and off-diagonal = pairwise covariances
+    :param mu: an array of expected asset returns
+    :return: w: an array of asset weights
+    """
     inv = np.linalg.inv(cov)
     ones = np.ones(shape=(inv.shape[0], 1))
     if mu is None:
         mu = ones
     w = np.dot(inv, mu)
-    w /= np.dot(ones.T, w)
+    w /= np.dot(ones.T, w)  # normalize weights to [0, 1]
     return w
 
 
