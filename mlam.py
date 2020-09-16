@@ -235,6 +235,14 @@ def form_true_matrix(n_blocks, b_size, b_corr):
 
 
 def sim_cov_mu(mu0, cov0, n_obs, shrink=False):
+    """
+    
+    :param mu0:
+    :param cov0:
+    :param n_obs:
+    :param shrink:
+    :return:
+    """
     x = np.random.multivariate_normal(mu0.flatten(), cov0, size=n_obs)
     mu1 = x.mean(axis=0).reshape(-1, 1)
     if shrink:
@@ -272,6 +280,43 @@ def opt_port(cov, mu=None):
     w = np.dot(inv, mu)
     w /= np.dot(ones.T, w)  # normalize weights to [0, 1]
     return w
+
+
+def experiment(mu0, cov0, n_trials, shrink=False, min_var_portf=True):
+    """
+    Compute root mean squared errors with/without shrinkage and with/without cov denoising
+    :param n_trials: integer
+    :param shrink: boolean
+    :param min_var_portf: boolean
+    :return: rmse, rmse: float
+    """
+
+    w1 = pd.DataFrame(columns=np.arange(cov0.shape[0]),
+                      index=np.arange(n_trials))
+    w1_d = w1.copy(deep=True)
+
+    # Construct
+    w0 = opt_port(cov0, None if min_var_portf else mu0)
+    w0 = np.repeat(w0.T, w1.shape[0], axis=0)
+
+    # Run experiments
+    n_obs = 1000
+    b_width = 0.01
+    np.random.seed(0)
+    for i in range(n_trials):
+        mu1, cov1 = sim_cov_mu(mu0, cov0, n_obs, shrink=shrink)
+        if min_var_portf:
+            mu1 = None
+        cov1_d = denoise_cov(cov1, (n_obs * 1.0) / cov1.shape[1], b_width)
+
+        w1.loc[i] = opt_port(cov1, mu1).flatten()
+        w1_d.loc[i] = opt_port(cov1_d, mu1).flatten()
+
+    # Compute root mean square errors
+    rmse = np.mean((w1 - w0).values.flatten() ** 2) ** 0.5
+    rmse_d = np.mean((w1_d - w0).values.flatten() ** 2) ** 0.5
+
+    return rmse, rmse_d
 
 
 
