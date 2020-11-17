@@ -15,7 +15,6 @@ import yfinance as yf
 from scipy.optimize import minimize
 from scipy.linalg import block_diag
 from sklearn.covariance import LedoitWolf
-import matplotlib.pyplot as plt
 
 
 def get_daily_stock_returns(period='5y', interval='1d'):
@@ -62,8 +61,9 @@ def mp_pdf(var, q, pts):
 
 def get_pca(matrix):
     """ Get eigenvalues and eigenvector from a Hermitian matrix.
+
     :param matrix: array of float
-    :return:
+    :return: eVal, eVec: arrays of float, eigenvalues and eigenvectors
     """
     eVal, eVec = np.linalg.eigh(matrix)
     indices = eVal.argsort()[::-1]  # indices of sorted eVal in descending order
@@ -140,6 +140,7 @@ def err_pdfs(var, e_val, q, b_width, pts=1000):
 def find_max_eval(e_val, q, b_width):
     """
     Find max random eigenvalue by fitting Marcenko-Pastur distribution
+
     :param e_val:
     :param q:
     :param b_width:
@@ -201,11 +202,13 @@ def denoised_corr2(e_val, e_vec, n_facts, alpha=0):
 
 def form_block_matrix(n_blocks, b_size, b_corr):
     """
-    Construct block matrices and center along diagonal of main matrix
-    :param n_blocks:
-    :param b_size:
-    :param b_corr:
-    :return:
+    Construct a correlation matrix with block matrices (representing common factors)
+    centered along the diagonal.
+
+    :param n_blocks: integer, the number of common factors (e.g., economic sectors)
+    :param b_size: integer, the shape of each block
+    :param b_corr: float, the off-diagonal correlations within each block
+    :return: corr: array of float, the final correlation matrix
     """
 
     block = np.ones((b_size, b_size)) * b_corr
@@ -216,19 +219,32 @@ def form_block_matrix(n_blocks, b_size, b_corr):
 
 def form_true_matrix(n_blocks, b_size, b_corr):
     """
+    Construct a true (non-empirical), detoned covariance matrix where each
+    factor block is assumed to be an economic sector.
 
-    :param n_blocks:
-    :param b_size:
-    :param b_corr:
-    :return:
+    :param n_blocks: integer, the number of economic sectors
+    :param b_size: integer, the shape of each square block
+    :param b_corr: float, the off-diagonal correlations within each block
+    :return: mu0, cov0: arrays of float, the expected assets returns and the
+                        true covariance matrix
     """
+    # Create block correlation matrix
     corr0 = form_block_matrix(n_blocks, b_size, b_corr)
     corr0 = pd.DataFrame(corr0)
     cols = corr0.columns.to_list()
+
+    # Randomly shuffle the assets in the matrix
     np.random.shuffle(cols)  # shuffles in place
     corr0 = corr0[cols].loc[cols].copy(deep=True)  # deep = True is default
+
+    # Randomly select asset variances (diagonal) uniformly from [0.05, 0.20]
     std0 = np.random.uniform(0.05, 0.2, corr0.shape[0])
+
+    # Construct the true covariance matrix
     cov0 = corr2cov(corr0, std0)
+
+    # Randomly select asset returns from Gaussian distribution and assuming
+    # equal Sharpe ratios.
     mu0 = np.random.normal(std0, std0, cov0.shape[0]).reshape(-1, 1)
 
     return mu0, cov0
@@ -236,15 +252,24 @@ def form_true_matrix(n_blocks, b_size, b_corr):
 
 def sim_cov_mu(mu0, cov0, n_obs, shrink=False):
     """
-    
-    :param mu0:
-    :param cov0:
-    :param n_obs:
-    :param shrink:
-    :return:
+    Create an empirical covariance matrix by randomly sampling from true matrix.
+    If shrink=True, apply Ledoit-Wolf shrinkage procedure.
+
+    :param mu0: array of float, a vector of expected asset returns
+    :param cov0: array of float, a matrix of true asset covariances
+    :param n_obs: int, the number of assets to sample
+    :param shrink: boolean, if True apply Ledoit-Wolf shrinkage
+    :return: mu1, cov1: arrays of float, the empirical asset returns and
+                                        the empirical asset covariance matrix
     """
+
+    # Randomly select asset returns assuming Gaussian distribution
     x = np.random.multivariate_normal(mu0.flatten(), cov0, size=n_obs)
+
+    # Compute the mean expected return for each asset
     mu1 = x.mean(axis=0).reshape(-1, 1)
+
+    # Construct the empirical covariance matrix
     if shrink:
         cov1 = LedoitWolf().fit(x).covariance_
     else:
@@ -254,8 +279,21 @@ def sim_cov_mu(mu0, cov0, n_obs, shrink=False):
 
 
 def denoise_cov(cov0, q, b_width):
+    """
+    Denoise covariance matrix
+
+    :param cov0:
+    :param q:
+    :param b_width:
+    :return:
+    """
+    # Extract the implied correlation matrix from the covariance matrix
     corr0 = cov2corr(cov0)
+
+    # Compute the eigenvalues and eigenvectors from the correlation matrix
     eval0, evec0 = get_pca(corr0)
+
+
     emax0, var0 = find_max_eval(np.diag(eval0), q, b_width)
     nfacts0 = eval0.shape[0] - np.diag(eval0)[::-1].searchsorted(emax0)
     corr1 = denoised_corr(eval0, evec0, nfacts0)
@@ -267,54 +305,68 @@ def denoise_cov(cov0, q, b_width):
 def opt_port(cov, mu=None):
     """
     Find portfolio weights, w, that minimizes risk for a given level of expected returns, mu.
-    Procedure follows the alternative derivation in Zivot's Portfolio Matrix Theory Ch.1 (2013)
 
-    :param cov: a square matrix, diagonal = variances and off-diagonal = pairwise covariances
-    :param mu: an array of expected asset returns
-    :return: w: an array of asset weights
+    :param cov: array of float, a square asset covariance matrix
+    :param mu: array of float, a vector of expected asset returns
+    :return: w: array of float, a vector of asset weights
     """
-    inv = np.linalg.inv(cov)
+    inv = np.linalg.inv(cov)  # invert matrix
     ones = np.ones(shape=(inv.shape[0], 1))
     if mu is None:
-        mu = ones
-    w = np.dot(inv, mu)
+        mu = ones  # compute min variance portfolio, else compute max Sharpe ratio portfolio
+
+    w = np.dot(inv, mu)  # see Eric Zivot, Portfolio Matrix Theory Ch.1 (2013)
     w /= np.dot(ones.T, w)  # normalize weights to [0, 1]
+
     return w
 
 
-def experiment(mu0, cov0, n_trials, shrink=False, min_var_portf=True):
+def experiment_292(mu0, cov0, n_trials, shrink=False, min_var_portf=True):
     """
-    Compute root mean squared errors with/without shrinkage and with/without cov denoising
-    :param n_trials: integer
-    :param shrink: boolean
-    :param min_var_portf: boolean
-    :return: rmse, rmse: float
+    Monte Carlo simulation: Construct empirical covariance matrix and then create a denoised
+    version. Compute the root mean squared errors (RMSE) of the denoised and not denoised
+    matrices with the true covariance matrix.
+
+    :param n_trials: integer, the number of simulations
+    :param shrink: boolean, if True apply Ledoit-Wolf shrinkage
+    :param min_var_portf: boolean, if True construct minimum variance,
+                                    else construct maximum Sharpe ratio portfolios
+    :return: rmse, rmse_d: float, the root mean squared errors between the true
+                                and the empirical optimal portfolio
     """
 
     w1 = pd.DataFrame(columns=np.arange(cov0.shape[0]),
                       index=np.arange(n_trials))
     w1_d = w1.copy(deep=True)
 
-    # Construct
+    # Compute the true optimal portfolio weights and make a copy for each simulation.
     w0 = opt_port(cov0, None if min_var_portf else mu0)
     w0 = np.repeat(w0.T, w1.shape[0], axis=0)
 
-    # Run experiments
+    # Run Monte Carlo experiments
     n_obs = 1000
     b_width = 0.01
     np.random.seed(0)
-    for i in range(n_trials):
-        mu1, cov1 = sim_cov_mu(mu0, cov0, n_obs, shrink=shrink)
-        if min_var_portf:
-            mu1 = None
-        cov1_d = denoise_cov(cov1, (n_obs * 1.0) / cov1.shape[1], b_width)
 
+    for i in range(n_trials):
+        # Create an empirical covariance matrix by sampling from the true covariance
+        mu1, cov1 = sim_cov_mu(mu0, cov0, n_obs, shrink=shrink)
+
+        if min_var_portf:
+            mu1 = None  # minimum variance portfolio, else maximum Sharpe ratio.
+
+        # Denoise the empirical covariance matrix
+        q = n_obs * 1.0 / cov1.shape[1]
+        cov1_d = denoise_cov(cov1, q, b_width)
+
+        # Compute the optimal asset weights for the not denoised and denoised
+        # covariance matrix
         w1.loc[i] = opt_port(cov1, mu1).flatten()
         w1_d.loc[i] = opt_port(cov1_d, mu1).flatten()
 
-    # Compute root mean square errors
-    rmse = np.mean((w1 - w0).values.flatten() ** 2) ** 0.5
-    rmse_d = np.mean((w1_d - w0).values.flatten() ** 2) ** 0.5
+    # Compute RMSE between the true asset weights and the empirical weights
+    rmse = np.mean((w1 - w0).values.flatten() ** 2) ** 0.5  # not denoised
+    rmse_d = np.mean((w1_d - w0).values.flatten() ** 2) ** 0.5  # denoised
 
     return rmse, rmse_d
 
