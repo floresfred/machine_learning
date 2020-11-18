@@ -15,6 +15,37 @@ import matplotlib.pyplot as plt
 from matplotlib_venn import venn2
 
 
+def kl_divergence(px, qx):
+    """ The Kullback-Leibler (KL) Divergence. The difference between two discrete probability
+        distributions, px and qx.
+
+    :param px: numpy array of float, probability distribution, np.sum(px) = 1.0
+    :param qx: numpy array of float, probability distribution, np.sum(qx) = 1.0
+    :return: float
+    """
+    px = px/np.sum(px)
+    qx = qx/np.sum(qx)
+    return -np.sum(px*np.log(qx/px))
+
+
+def marginal_entropy(px):
+    """ The amount of uncertainty associated with a discrete random variable x.
+        It is the expected value of all surprising observations of x.
+
+    :param px: numpy array of float, probability distribution, np.sum(px) = 1.0
+    :return:
+    """
+    # identical to scipy.stats.entropy(px)
+    px = px/np.sum(px)
+    return -np.sum(px*np.log(px))
+
+
+def cross_entropy(px, qx):
+    px = px/np.sum(px)
+    qx = qx/np.sum(qx)
+    return -np.sum(px*np.log(qx))
+
+
 def num_bins(n_obs, corr=None):
     # Compute optimal number of bins for discretization
     if corr is None:

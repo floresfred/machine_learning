@@ -5,7 +5,7 @@ __version__ = '0.0.1'
 __date__ = '2020-08-28'
 __email__ = 'fredflorescfa@gmail.com'
 
-"""Code from MLdP's Machine Learning for Asset Managers"""
+"""Code from MLdP's Ch.2 Machine Learning for Asset Managers"""
 
 import numpy as np
 import pandas as pd
