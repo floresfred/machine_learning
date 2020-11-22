@@ -11,22 +11,25 @@ import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_samples
+from sklearn.utils import check_random_state
+from scipy.linalg import block_diag
+from machine_learning.mlam_2_denoise_detone import cov2corr
 
 
 def cluster_kmeans_base(corr0, max_num_clusters=10, n_init=10):
     """
     An application of sklearn.cluster.KMeans that
         1] searches for the optimal number of clusters based on the Silhouette score
-        2] mitigates the randomness of the centroid initialization
+        2] mitigates the randomness of KMeans' initialization by running alternative seeds.
 
-    :param corr0: array of float (NxN), a square, nondegenerate correlation matrix (rank>2)
+    :param corr0: array of float (NxN), a square, non-degenerate correlation matrix (rank>2)
     :param max_num_clusters: int, the upper limit on the optimal cluster number search
     :param n_init: int, the number of centroid seed initializations
     :return: corr1: array of float (NxN), a copy of corr0 that is reordered by cluster.
              clstrs, dict,
                 keys: int, cluster label
                 values: list of int, the index members of each cluster
-                silh: array of float, the Silhouette Score by index
+            silh: array of float, the Silhouette Score by index member
     """
 
     # Transform the linear correlation matrix to a metric-based codependence matrix.
@@ -34,6 +37,7 @@ def cluster_kmeans_base(corr0, max_num_clusters=10, n_init=10):
     x = ((1-corr0.fillna(0))/2.0)**0.5
 
     silh = pd.Series()
+    kmeans = None
 
     for init in range(n_init):
         for i in range(2, max_num_clusters+1):
@@ -77,14 +81,30 @@ def make_new_outputs(corr0, clstrs, clstrs2):
 
 
 def cluster_kmeans_top(corr0, max_num_clusters=None, n_init=10):
+    """
+    A recursive function to re-cluster the observations of all original clusters whose average Silhouette t-stat
+    falls below the average cluster.
+
+    :param corr0: array of float (NxN), a square, non-degenerate correlation matrix (rank>2)
+    :param max_num_clusters: int, the upper limit on the optimal cluster number search
+    :param n_init: int, the number of centroid seed initializations
+    :return: corr_new: array of float (NxN), a copy of corr0 that is reordered by cluster.
+             clstrs_new, dict,
+                keys: int, cluster label
+                values: list of int, the index members of each cluster
+            silh_new: array of float, the Silhouette Score by index member
+    """
     if max_num_clusters is None:
         max_num_clusters = corr0.shape[1] - 1
+
     corr1, clstrs, silh = cluster_kmeans_base(corr0,
                                               max_num_clusters=min(max_num_clusters, corr0.shape[1]-1),
                                               n_init=n_init)
-    cluster_tstats = {i: np.mean(silh[clstrs[i]])/np.std(silh[clstrs[i]]) for i in clstrs.keys()}
+
+    cluster_tstats = {i: np.mean(silh[clstrs[i]])/np.std(silh[clstrs[i]])
+        if np.isnan(np.std(silh[clstrs[i]])) else np.nan for i in clstrs.keys()}
     tstat_mean = sum(cluster_tstats.values())/len(cluster_tstats)
-    redo_clusters = [i for i in cluster_tstats.keys() if cluster_tstats[i]<tstat_mean]
+    redo_clusters = [i for i in cluster_tstats.keys() if cluster_tstats[i] < tstat_mean]
     if len(redo_clusters) <= 1:
         return corr1, clstrs, silh
     else:
@@ -104,3 +124,43 @@ def cluster_kmeans_top(corr0, max_num_clusters=None, n_init=10):
             return corr1, clstrs, silh
         else:
             return corr_new, clstrs_new, silh_new
+
+
+def get_cov_sub(n_obs, n_cols, sigma, random_state=None):
+
+    rng = check_random_state(random_state)
+    if n_cols == 1:
+        return np.ones((1, 1))
+    ar0 = rng.normal(size=(n_obs, 1))
+    ar0 = np.repeat(ar0, n_cols, axis=1)
+    ar0 += rng.normal(scale=sigma, size=ar0.shape)
+    ar0 = np.cov(ar0, rowvar=False)
+    return ar0
+
+
+def get_rnd_block_cov(n_cols, n_blocks, min_block_size=1, sigma=1.0, random_state=None):
+
+    rng = check_random_state(random_state)
+    parts = rng.choice(range(1, n_cols-(min_block_size-1)*n_blocks), n_blocks-1, replace=False)
+    parts.sort()
+    parts = np.append(parts, n_cols-(min_block_size-1)*n_blocks)
+    parts = np.append(parts[0], np.diff(parts)) - 1 + min_block_size
+    cov = None
+    for n_cols_ in parts:
+        cov_ = get_cov_sub(int(max(n_cols * (n_cols_ + 1)/2.0, 100)), n_cols_, sigma, random_state=rng)
+        if cov is None:
+            cov = cov_.copy()
+        else:
+            cov = block_diag(cov, cov_)
+    return cov
+
+
+def random_block_corr(n_cols, n_blocks, random_state=None, min_block_size=1):
+
+    rng = check_random_state(random_state)
+    cov0 = get_rnd_block_cov(n_cols, n_blocks, min_block_size=min_block_size, sigma=0.5, random_state=rng)
+    cov1 = get_rnd_block_cov(n_cols, 1, min_block_size=min_block_size, sigma=1.0, random_state=rng)
+    cov0 += cov1
+    corr0 = cov2corr(cov0)
+    corr0 = pd.DataFrame(corr0)
+    return corr0
