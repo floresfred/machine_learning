@@ -102,7 +102,7 @@ def cluster_kmeans_top(corr0, max_num_clusters=None, n_init=10):
                                               n_init=n_init)
 
     cluster_tstats = {i: np.mean(silh[clstrs[i]])/np.std(silh[clstrs[i]])
-        if np.isnan(np.std(silh[clstrs[i]])) else np.nan for i in clstrs.keys()}
+        if not (np.isnan(np.std(silh[clstrs[i]])) in [np.nan, 0.0]) else np.nan for i in clstrs.keys()}
     tstat_mean = sum(cluster_tstats.values())/len(cluster_tstats)
     redo_clusters = [i for i in cluster_tstats.keys() if cluster_tstats[i] < tstat_mean]
     if len(redo_clusters) <= 1:
